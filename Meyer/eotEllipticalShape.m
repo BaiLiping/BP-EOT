@@ -38,7 +38,6 @@ for step = 1:numSteps
     measurements = measurementsCell{step};
     numMeasurements = size(measurements,2);
     
-    
     % perform prediction step
     [currentParticlesKinematic,currentExistences,currentParticlesExtent] = performPrediction(currentParticlesKinematic,currentExistences,currentParticlesExtent,scanTime,parameters);    
     currentAlive = currentExistences*exp(-meanMeasurements);
