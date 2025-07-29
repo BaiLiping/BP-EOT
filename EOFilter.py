@@ -55,21 +55,14 @@ class bp_eo_filter_3d:
         self.pruning_threshold = parameters['pruning_threshold']
         self.num_steps = parameters['nun_steps']
         self.p_d = parameters['p_d']
+        self.mu_m = parameters['mu_m']
         self.clutter_intensity = self.mu_c * self.f_c
-
-        # --- 3D Change: Surveillance volume is now a sphere ---
         self.surveillanceVolume = (4/3) * np.pi * self.sensingRange ** 3
         self.birth_intensity = self.mu_n / self.surveillanceVolume
-
-        # --- 3D Change: Sensor positions must be a 3 x num_sensors array ---
         self.sensor_positions = parameters['sensor_positions']
         self.var_range = parameters['range_variance']
         self.var_bearing = parameters['bearing_variance']
-        # --- 3D Change: Added elevation variance for 3D measurements ---
         self.var_elevation = parameters['elevation_variance']
-
-        # --- 3D Change: Initialize particles with a default 3D position ---
-        # Note: The `initiate_particles` method must also be updated to generate 6D states.
         self.new_particles = self.initiate_particles([0, 0, 0])
         self.likelihood_table = np.zeros((1, 0, self.num_particles))
 
@@ -82,7 +75,6 @@ class bp_eo_filter_3d:
                            [0, 0, 0, 0, 1, 0],
                            [0, 0, 0, 0, 0, 1]])
 
-        # --- 3D Change: Process noise covariance matrix (Q) for a 6D state ---
         dt = self.d_t
         self.Q = np.array([[dt**4/4, 0, 0, dt**3/2, 0, 0],
                            [0, dt**4/4, 0, 0, dt**3/2, 0],
@@ -91,7 +83,6 @@ class bp_eo_filter_3d:
                            [0, dt**3/2, 0, 0, dt**2, 0],
                            [0, 0, dt**3/2, 0, 0, dt**2]])
 
-        # --- 3D Change: Initialize Bernoulli mixtures with 6D states and 3D extents ---
         self.alpha = BernoulliMixture(
             states=np.zeros((6, self.num_particles, 0)),
             extent=np.zeros((3, self.num_particles, 0)),
@@ -100,16 +91,17 @@ class bp_eo_filter_3d:
         )
         self.varsigma = BernoulliMixture(
             states=np.zeros((6, self.num_particles, 0)),
+            extent=np.zeros((3, self.num_particles, 0)),
             existence=[],
             label=[]
         )
         self.gamma = BernoulliMixture(
             states=np.zeros((6, self.num_particles, 0)),
+            extent=np.zeros((3, self.num_particles, 0)),
             existence=[],
             label=[]
         )
 
-        # Data Association messages (initialized as empty arrays)
         self.xi = np.array([])
         self.beta = np.array([])
         self.nu = np.array([])
@@ -127,7 +119,7 @@ class bp_eo_filter_3d:
         # return initial_state + np.random.randn(6, self.num_particles)
         return np.zeros((6, self.num_particles))
     
-    
+
     def compute_alpha(self) -> None:
         """
         Predicts the target states (alpha) from the gamma mixture.
