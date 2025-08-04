@@ -49,7 +49,8 @@ class ExtendedObjectFilter:
         inv_det = 1.0 / det_all
         
         # Matrix inverse using determinant formula for 2x2 matrices
-        temp = inv_det * innovation.T
+        # Fix broadcasting: inv_det is (num_particles,), innovation.T is (num_particles, 2)
+        temp = inv_det[:, np.newaxis] * innovation.T
         part1 = np.zeros((num_particles, 2))
         part1[:, 0] = temp[:, 0] * particle_extents[1, 1, :] - temp[:, 1] * particle_extents[1, 0, :]
         part1[:, 1] = -temp[:, 0] * particle_extents[0, 1, :] + temp[:, 1] * particle_extents[0, 0, :]
@@ -383,14 +384,18 @@ class ExtendedObjectFilter:
         prior_extent1 = self.parameters['priorExtent1']
         prior_extent2 = self.parameters['priorExtent2']
         
+        # surveillance_region format: [[x_min, y_min], [x_max, y_max]]
         area_size = ((surveillance_region[1, 0] - surveillance_region[0, 0]) * 
                     (surveillance_region[1, 1] - surveillance_region[0, 1]))
         measurements_covariance = measurement_variance * np.eye(2)
         
-        mean_extent_prior = np.linalg.matrix_power(
-            prior_extent1 / (prior_extent2 - 3), 2
-        )
-        total_covariance = mean_extent_prior + measurements_covariance
+        # Ensure area_size is positive to avoid division by zero
+        if area_size <= 0:
+            raise ValueError(f"Invalid surveillance region area: {area_size}, region: {surveillance_region}")
+        
+        mean_extent_prior = (prior_extent1 / (prior_extent2 - 3))
+        mean_extent_prior_squared = mean_extent_prior @ mean_extent_prior.T
+        total_covariance = mean_extent_prior_squared + measurements_covariance
         
         num_steps = len(measurements_cell)
         constant_factor = area_size * (mean_measurements / mean_clutter)
