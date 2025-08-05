@@ -267,7 +267,7 @@ def generate_default_parameters() -> Dict[str, Any]:
         'accelerationDeviation': 1.0,
         'survivalProbability': 0.99,
         'meanBirths': 0.01,
-        'surveillanceRegion': np.array([[-200, 200], [-200, 200]]),
+        'surveillanceRegion': np.array([[-200, -200], [200, 200]]),
         'measurementVariance': 1.0,
         'meanMeasurements': 8,
         'meanClutter': 10,
