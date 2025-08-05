@@ -21,6 +21,14 @@ Python implementation of the EOT algorithms.
 - Test scripts and examples
 - See the [Python README](Python_Implementation/README.md) for detailed documentation
 
+### `/Paper_Replication`
+Pure mathematical implementation based solely on the paper's theoretical formulation.
+- **No reference to existing code** - implemented purely from mathematical equations
+- Demonstrates measurement-oriented data association innovation
+- Factor graph representation with belief propagation
+- Validates completeness of the paper's mathematical specification
+- See the [Paper Replication README](Paper_Replication/README.md) for detailed documentation
+
 ### `/arXiv-2103.11279v4`
 Paper source files (LaTeX) and figures.
 
@@ -46,11 +54,19 @@ Visualization of Meyer's result: https://www.youtube.com/watch?v=swHLoShcozw
 
 ### Python Implementation
 1. Navigate to the `/Python_Implementation` directory
-2. Install required packages: `pip install numpy scipy matplotlib`
+2. Install required packages: `pip install numpy scipy matplotlib`  
 3. Run example scripts:
    - `python test_main_replication.py` - Replicates the MATLAB main.m behavior
    - `python example_usage.py` - Simple usage example
    - `python test_fixed_filter.py` - Test with improved filter implementation
+
+### Paper-Based Implementation
+1. Navigate to the `/Paper_Replication` directory
+2. Install required packages: `pip install numpy scipy matplotlib`
+3. Run test scripts:
+   - `python quick_test_paper.py` - Fast validation test
+   - `python test_paper_implementation.py` - Comprehensive test with visualization
+   - `python debug_paper_implementation.py` - Internal algorithm analysis
 
 ## Key Features
 
