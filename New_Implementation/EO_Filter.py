@@ -11,7 +11,7 @@ This class represents a single Extended Object (Potential Object) with:
 
 import numpy as np
 from typing import Optional, Dict, Any, Tuple, List
-from scipy.stats import multivariate_normal, wishart
+from scipy.stats import multivariate_normal, wishart, invwishart
 from scipy.linalg import inv, sqrtm
 
 
@@ -159,6 +159,56 @@ class EOFilter:
                 f"exist_prob={self.existence_prob:.3f})")
     
     # ========================================================================
+    # HELPER FUNCTIONS
+    # ========================================================================
+    
+    @staticmethod
+    def sample_inverse_wishart(dof: float, scale_matrix: np.ndarray) -> np.ndarray:
+        """
+        Sample from Inverse Wishart distribution IW(ν, Ψ).
+        
+        The Inverse Wishart is the conjugate prior for covariance matrices.
+        If E ~ IW(ν, Ψ), then:
+        - E is positive definite
+        - E[E] = Ψ / (ν - d - 1) for ν > d + 1
+        
+        Uses scipy.stats.invwishart for proper sampling.
+        
+        Args:
+            dof: Degrees of freedom ν (must be > dimension - 1)
+            scale_matrix: Scale matrix Ψ (positive definite)
+            
+        Returns:
+            Sample from IW(ν, Ψ)
+        """
+        d = scale_matrix.shape[0]
+        
+        # Validate inputs
+        if dof <= d - 1:
+            raise ValueError(f"Degrees of freedom {dof} must be > dimension - 1 = {d-1}")
+        
+        try:
+            # Ensure scale matrix is positive definite
+            eigenvals = np.linalg.eigvalsh(scale_matrix)
+            if np.min(eigenvals) <= 0:
+                # Make it positive definite
+                scale_matrix = scale_matrix + np.eye(d) * (abs(np.min(eigenvals)) + 1e-6)
+            
+            # Use scipy's native inverse Wishart implementation
+            # Note: scipy.stats.invwishart uses (df, scale) parameterization
+            return invwishart.rvs(df=dof, scale=scale_matrix)
+            
+        except (np.linalg.LinAlgError, ValueError):
+            # Fallback: use the Wishart inversion method if native fails
+            try:
+                scale_inv = inv(scale_matrix)
+                wishart_sample = wishart.rvs(df=dof, scale=scale_inv)
+                return inv(wishart_sample)
+            except:
+                # Last resort: return scaled matrix
+                return scale_matrix / dof
+    
+    # ========================================================================
     # MESSAGE COMPUTATION FUNCTIONS - Following Meyer & Williams (2021)
     # ========================================================================
     
@@ -232,11 +282,10 @@ class EOFilter:
             # Sample from Inverse Wishart
             # IW(E; ν, Ψ) where Ψ is scale matrix, ν is degrees of freedom
             try:
-                # Sample from Wishart then invert (standard technique)
-                wishart_sample = wishart.rvs(df=dof, scale=inv(scale_matrix))
-                predicted_extent[:, :, j] = inv(wishart_sample)
-            except:
+                predicted_extent[:, :, j] = self.sample_inverse_wishart(dof, scale_matrix)
+            except (ValueError, np.linalg.LinAlgError) as e:
                 # Fallback: add small noise if sampling fails
+                # This can happen if matrix becomes ill-conditioned
                 extent_noise = tau * np.eye(self.extent_dim)
                 predicted_extent[:, :, j] = prev_extent + extent_noise
             
