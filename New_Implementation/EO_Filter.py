@@ -35,20 +35,20 @@ class EOFilter:
             num_particles: Number of particles for particle filter representation
             label: Unique identifier for this object
         """
-        # Dimensions for 2D tracking (following paper's implementation)
-        self.spatial_dim = 2  # 2D space (x, y)
-        self.kinematic_dim = 6  # [px, py, vx, vy, turn_rate, meas_rate]
-        self.extent_dim = 2  # 2x2 extent matrix (as used in paper)
+        # Dimensions for 3D tracking with yaw-only rotation
+        self.spatial_dim = 3  # 3D space (x, y, z)
+        self.kinematic_dim = 8  # [px, py, pz, vx, vy, vz, yaw_rate, meas_rate]
+        self.extent_dim = 3  # 3x3 extent matrix
         
         # Number of particles
         self.num_particles = num_particles
         
         # Particle representation of kinematic state
-        # Shape: (6, num_particles) for [px, py, vx, vy, turn_rate, meas_rate]
+        # Shape: (8, num_particles) for [px, py, pz, vx, vy, vz, yaw_rate, meas_rate]
         self.kinematic_particles = np.zeros((self.kinematic_dim, num_particles))
         
         # Particle representation of extent state
-        # Shape: (2, 2, num_particles) - one 2x2 matrix per particle
+        # Shape: (3, 3, num_particles) - one 3x3 matrix per particle
         self.extent_particles = np.zeros((self.extent_dim, self.extent_dim, num_particles))
         
         # Initialize extent particles to small positive definite matrices
@@ -121,10 +121,10 @@ class EOFilter:
                                 weights=normalized_weights)
         
         return {
-            'position': kinematic_mmse[:2],          # [px, py]
-            'velocity': kinematic_mmse[2:4],         # [vx, vy]
-            'turn_rate': kinematic_mmse[4],          # turn rate
-            'meas_rate': kinematic_mmse[5],          # measurement rate
+            'position': kinematic_mmse[:3],          # [px, py, pz]
+            'velocity': kinematic_mmse[3:6],         # [vx, vy, vz]
+            'yaw_rate': kinematic_mmse[6],           # yaw rate (rotation around z-axis)
+            'meas_rate': kinematic_mmse[7],          # measurement rate
             'extent': extent_mmse,
             'existence_prob': self.existence_prob,
             'label': self.label
@@ -157,7 +157,7 @@ class EOFilter:
         mmse = self.get_mmse_estimate()
         pos = mmse['position']
         return (f"EOFilter(label={self.label}, "
-                f"pos=[{pos[0]:.1f}, {pos[1]:.1f}], "
+                f"pos=[{pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f}], "
                 f"exist_prob={self.existence_prob:.3f})")
     
     # ========================================================================
@@ -220,7 +220,7 @@ class EOFilter:
                      measurement_rate_func: callable,
                      motion_params: Optional[Dict] = None) -> Tuple[np.ndarray, float]:
         """
-        Compute α (alpha) message - Prediction step with CTRV motion model.
+        Compute α (alpha) message - Prediction step with 3D CTRV motion model.
         
         Paper reference: Section III-B-1, Equations (10)-(12) and Equation (8)
         
@@ -228,11 +228,11 @@ class EOFilter:
         f(x_k, E_k | x_{k-1}, E_{k-1}) = N(x_k; f(x_{k-1}), Σ_k) × W(E_k; q_k, V(m_{k-1}) E_{k-1} V(m_{k-1})^T / q_k)
         
         Where:
-        - f(x_{k-1}) is the CTRV (Constant Turn Rate and Velocity) model
-        - V(m_{k-1}) is rotation matrix based on turn rate
+        - f(x_{k-1}) is the 3D CTRV (Constant Turn Rate and Velocity) model
+        - V(m_{k-1}) is yaw rotation matrix (rotation around z-axis only)
         - Extent is rotated: V * E * V^T
         
-        Kinematic state: [px, py, vx, vy, turn_rate, meas_rate]
+        Kinematic state: [px, py, pz, vx, vy, vz, yaw_rate, meas_rate]
         
         Args:
             dt: Time step duration
@@ -246,9 +246,9 @@ class EOFilter:
         # Default motion parameters
         if motion_params is None:
             motion_params = {
-                'process_noise_pos': 1.0,      # Process noise for position
-                'process_noise_vel': 1.0,      # Process noise for velocity  
-                'process_noise_turn': 0.1,     # Process noise for turn rate
+                'process_noise_pos': 1.0,      # Process noise for position (x,y,z)
+                'process_noise_vel': 1.0,      # Process noise for velocity (vx,vy,vz)
+                'process_noise_yaw': 0.1,      # Process noise for yaw rate
                 'process_noise_meas': 0.1,     # Process noise for measurement rate
                 'extent_dof': 10.0,            # Degrees of freedom for Wishart
             }
@@ -256,7 +256,7 @@ class EOFilter:
         # Extract motion parameters
         σ_pos = motion_params.get('process_noise_pos', 1.0)
         σ_vel = motion_params.get('process_noise_vel', 1.0)
-        σ_turn = motion_params.get('process_noise_turn', 0.1)
+        σ_yaw = motion_params.get('process_noise_yaw', 0.1)
         σ_meas = motion_params.get('process_noise_meas', 0.1)
         q_extent = motion_params.get('extent_dof', 10.0)
         
@@ -265,53 +265,64 @@ class EOFilter:
         predicted_extent = np.zeros_like(self.extent_particles)
         
         for j in range(self.num_particles):
-            # Current state: [px, py, vx, vy, turn_rate, meas_rate]
+            # Current state: [px, py, pz, vx, vy, vz, yaw_rate, meas_rate]
             prev_state = self.kinematic_particles[:, j]
-            px_prev, py_prev, vx_prev, vy_prev, turn_rate_prev, meas_rate_prev = prev_state
+            px_prev, py_prev, pz_prev, vx_prev, vy_prev, vz_prev, yaw_rate_prev, meas_rate_prev = prev_state
             
-            # CTRV Motion Model (Constant Turn Rate and Velocity)
-            if abs(turn_rate_prev) < 1e-6:  # Nearly straight motion
-                # Linear motion
+            # 3D CTRV Motion Model (Constant Turn Rate and Velocity)
+            # Yaw affects only x-y plane motion, z motion is independent
+            
+            if abs(yaw_rate_prev) < 1e-6:  # Nearly straight motion
+                # Linear motion in x-y plane
                 px_pred = px_prev + vx_prev * dt
                 py_pred = py_prev + vy_prev * dt
                 vx_pred = vx_prev
                 vy_pred = vy_prev
             else:
-                # Curved motion with turn rate
-                # CTRV equations from standard literature
-                sin_wt = np.sin(turn_rate_prev * dt)
-                cos_wt = np.cos(turn_rate_prev * dt)
+                # Curved motion in x-y plane with yaw rate
+                # CTRV equations from standard literature (x-y plane only)
+                sin_wt = np.sin(yaw_rate_prev * dt)
+                cos_wt = np.cos(yaw_rate_prev * dt)
                 
-                px_pred = px_prev + (vx_prev * sin_wt - vy_prev * (cos_wt - 1)) / turn_rate_prev
-                py_pred = py_prev + (vy_prev * sin_wt + vx_prev * (cos_wt - 1)) / turn_rate_prev
+                px_pred = px_prev + (vx_prev * sin_wt - vy_prev * (cos_wt - 1)) / yaw_rate_prev
+                py_pred = py_prev + (vy_prev * sin_wt + vx_prev * (cos_wt - 1)) / yaw_rate_prev
                 vx_pred = vx_prev * cos_wt - vy_prev * sin_wt
                 vy_pred = vy_prev * cos_wt + vx_prev * sin_wt
             
-            # Turn rate and measurement rate evolution with noise
-            turn_rate_pred = turn_rate_prev + np.random.normal(0, σ_turn * dt)
+            # Z motion is independent (constant velocity)
+            pz_pred = pz_prev + vz_prev * dt
+            vz_pred = vz_prev
+            
+            # Yaw rate and measurement rate evolution with noise
+            yaw_rate_pred = yaw_rate_prev + np.random.normal(0, σ_yaw * dt)
             meas_rate_pred = max(0.1, meas_rate_prev + np.random.normal(0, σ_meas * dt))
             
             # Add process noise to position and velocity
             px_pred += np.random.normal(0, σ_pos * dt)
             py_pred += np.random.normal(0, σ_pos * dt)
+            pz_pred += np.random.normal(0, σ_pos * dt)
             vx_pred += np.random.normal(0, σ_vel * dt)
             vy_pred += np.random.normal(0, σ_vel * dt)
+            vz_pred += np.random.normal(0, σ_vel * dt)
             
-            predicted_kinematic[:, j] = [px_pred, py_pred, vx_pred, vy_pred, turn_rate_pred, meas_rate_pred]
+            predicted_kinematic[:, j] = [px_pred, py_pred, pz_pred, vx_pred, vy_pred, vz_pred, yaw_rate_pred, meas_rate_pred]
             
-            # Extent Prediction with Rotation (Equation 8)
+            # Extent Prediction with Yaw Rotation (Equation 8)
             # E_k ~ W(q_k, V(m_{k-1}) E_{k-1} V(m_{k-1})^T / q_k)
             prev_extent = self.extent_particles[:, :, j]
             
-            # Rotation matrix V(m_{k-1}) based on turn angle
-            turn_angle = turn_rate_prev * dt
-            cos_theta = np.cos(turn_angle)
-            sin_theta = np.sin(turn_angle)
-            V = np.array([[cos_theta, -sin_theta],
-                         [sin_theta,  cos_theta]])
+            # Yaw rotation matrix V(yaw_rate) - rotation around z-axis only
+            yaw_angle = yaw_rate_prev * dt
+            cos_yaw = np.cos(yaw_angle)
+            sin_yaw = np.sin(yaw_angle)
             
-            # Rotate extent: V * E * V^T
-            rotated_extent = V @ prev_extent @ V.T
+            # 3x3 rotation matrix for yaw (rotation around z-axis)
+            V_yaw = np.array([[cos_yaw, -sin_yaw, 0],
+                             [sin_yaw,  cos_yaw, 0],
+                             [0,        0,       1]])
+            
+            # Rotate extent: V * E * V^T (yaw rotation only)
+            rotated_extent = V_yaw @ prev_extent @ V_yaw.T
             
             # Sample from Wishart distribution for extent prediction
             # W(q, Ψ) where Ψ = rotated_extent / q
