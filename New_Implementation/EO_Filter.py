@@ -35,20 +35,20 @@ class EOFilter:
             num_particles: Number of particles for particle filter representation
             label: Unique identifier for this object
         """
-        # Dimensions for 3D tracking
-        self.spatial_dim = 3  # 3D space (x, y, z)
-        self.kinematic_dim = 6  # Position (3) + Velocity (3)
-        self.extent_dim = 3  # 3x3 extent matrix
+        # Dimensions for 2D tracking (following paper's implementation)
+        self.spatial_dim = 2  # 2D space (x, y)
+        self.kinematic_dim = 6  # [px, py, vx, vy, turn_rate, meas_rate]
+        self.extent_dim = 2  # 2x2 extent matrix (as used in paper)
         
         # Number of particles
         self.num_particles = num_particles
         
         # Particle representation of kinematic state
-        # Shape: (6, num_particles) for [x, y, z, vx, vy, vz]
+        # Shape: (6, num_particles) for [px, py, vx, vy, turn_rate, meas_rate]
         self.kinematic_particles = np.zeros((self.kinematic_dim, num_particles))
         
         # Particle representation of extent state
-        # Shape: (3, 3, num_particles) - one 3x3 matrix per particle
+        # Shape: (2, 2, num_particles) - one 2x2 matrix per particle
         self.extent_particles = np.zeros((self.extent_dim, self.extent_dim, num_particles))
         
         # Initialize extent particles to small positive definite matrices
@@ -121,8 +121,10 @@ class EOFilter:
                                 weights=normalized_weights)
         
         return {
-            'position': kinematic_mmse[:3],
-            'velocity': kinematic_mmse[3:],
+            'position': kinematic_mmse[:2],          # [px, py]
+            'velocity': kinematic_mmse[2:4],         # [vx, vy]
+            'turn_rate': kinematic_mmse[4],          # turn rate
+            'meas_rate': kinematic_mmse[5],          # measurement rate
             'extent': extent_mmse,
             'existence_prob': self.existence_prob,
             'label': self.label
@@ -155,7 +157,7 @@ class EOFilter:
         mmse = self.get_mmse_estimate()
         pos = mmse['position']
         return (f"EOFilter(label={self.label}, "
-                f"pos=[{pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f}], "
+                f"pos=[{pos[0]:.1f}, {pos[1]:.1f}], "
                 f"exist_prob={self.existence_prob:.3f})")
     
     # ========================================================================
@@ -213,83 +215,117 @@ class EOFilter:
     # ========================================================================
     
     def compute_alpha(self, 
-                     state_transition_matrix: np.ndarray,
-                     process_noise_cov: np.ndarray,
+                     dt: float,
                      survival_prob: float,
                      measurement_rate_func: callable,
-                     extent_prediction_params: Optional[Dict] = None) -> Tuple[np.ndarray, float]:
+                     motion_params: Optional[Dict] = None) -> Tuple[np.ndarray, float]:
         """
-        Compute α (alpha) message - Prediction step.
+        Compute α (alpha) message - Prediction step with CTRV motion model.
         
-        Paper reference: Section III-B-1, Equations (10)-(12)
-        α̲(x̲_k, ē_k, r̲_k) from equation (10) represents predicted belief.
+        Paper reference: Section III-B-1, Equations (10)-(12) and Equation (8)
         
-        For r_k = 1: Equation (11)
-        α̲(x̲_k, ē_k, 1) = p_s * exp(-μ_m(x̲_k, ē_k)) * ∫∫ f(x̲_k, ē_k | x^-_k, e^-_k) * f̃(x^-_k, e^-_k, 1) dx^-_k de^-_k
+        Implements the state transition from Equation (8):
+        f(x_k, E_k | x_{k-1}, E_{k-1}) = N(x_k; f(x_{k-1}), Σ_k) × W(E_k; q_k, V(m_{k-1}) E_{k-1} V(m_{k-1})^T / q_k)
         
-        For r_k = 0: Equation (12)  
-        α̲^n_k = f̃^-_k + (1 - p_s) * (1 - f̃^-_k)
+        Where:
+        - f(x_{k-1}) is the CTRV (Constant Turn Rate and Velocity) model
+        - V(m_{k-1}) is rotation matrix based on turn rate
+        - Extent is rotated: V * E * V^T
         
-        For extent dynamics, the paper mentions using Inverse Wishart distribution.
-        The transition can be modeled as:
-        E_k | E_{k-1} ~ IW(ν_k, (ν_{k-1} - d - 1) * E_{k-1} + τ * Q_e)
-        where τ controls the rate of extent change, Q_e is process noise for extent.
+        Kinematic state: [px, py, vx, vy, turn_rate, meas_rate]
         
         Args:
-            state_transition_matrix: F matrix for kinematic state transition
-            process_noise_cov: Q matrix for process noise
+            dt: Time step duration
             survival_prob: p_s - probability of object survival
             measurement_rate_func: Function to compute μ_m(x,e)
-            extent_prediction_params: Dict with 'tau' (extent change rate), 
-                                    'dof_decay' (degrees of freedom decay)
+            motion_params: Dict with motion model parameters
             
         Returns:
             Tuple of (predicted_weights, alpha_n) where alpha_n is for r_k=0
         """
-        # Default extent prediction parameters
-        if extent_prediction_params is None:
-            extent_prediction_params = {
-                'tau': 0.1,  # Small change rate
-                'dof_decay': 0.99,  # Slow decay of degrees of freedom
+        # Default motion parameters
+        if motion_params is None:
+            motion_params = {
+                'process_noise_pos': 1.0,      # Process noise for position
+                'process_noise_vel': 1.0,      # Process noise for velocity  
+                'process_noise_turn': 0.1,     # Process noise for turn rate
+                'process_noise_meas': 0.1,     # Process noise for measurement rate
+                'extent_dof': 10.0,            # Degrees of freedom for Wishart
             }
         
-        tau = extent_prediction_params.get('tau', 0.1)
-        dof_decay = extent_prediction_params.get('dof_decay', 0.99)
+        # Extract motion parameters
+        σ_pos = motion_params.get('process_noise_pos', 1.0)
+        σ_vel = motion_params.get('process_noise_vel', 1.0)
+        σ_turn = motion_params.get('process_noise_turn', 0.1)
+        σ_meas = motion_params.get('process_noise_meas', 0.1)
+        q_extent = motion_params.get('extent_dof', 10.0)
         
-        # Predict kinematic particles using state transition
+        # Predict particles
         predicted_kinematic = np.zeros_like(self.kinematic_particles)
         predicted_extent = np.zeros_like(self.extent_particles)
         
         for j in range(self.num_particles):
-            # Kinematic prediction: x̲_k^(j) ~ f(x̲_k | x^-_k^(j))
-            predicted_kinematic[:, j] = (state_transition_matrix @ self.kinematic_particles[:, j] + 
-                                        np.random.multivariate_normal(np.zeros(self.kinematic_dim), 
-                                                                     process_noise_cov))
+            # Current state: [px, py, vx, vy, turn_rate, meas_rate]
+            prev_state = self.kinematic_particles[:, j]
+            px_prev, py_prev, vx_prev, vy_prev, turn_rate_prev, meas_rate_prev = prev_state
             
-            # Extent prediction using Inverse Wishart dynamics
-            # E_k | E_{k-1} follows an Inverse Wishart distribution
+            # CTRV Motion Model (Constant Turn Rate and Velocity)
+            if abs(turn_rate_prev) < 1e-6:  # Nearly straight motion
+                # Linear motion
+                px_pred = px_prev + vx_prev * dt
+                py_pred = py_prev + vy_prev * dt
+                vx_pred = vx_prev
+                vy_pred = vy_prev
+            else:
+                # Curved motion with turn rate
+                # CTRV equations from standard literature
+                sin_wt = np.sin(turn_rate_prev * dt)
+                cos_wt = np.cos(turn_rate_prev * dt)
+                
+                px_pred = px_prev + (vx_prev * sin_wt - vy_prev * (cos_wt - 1)) / turn_rate_prev
+                py_pred = py_prev + (vy_prev * sin_wt + vx_prev * (cos_wt - 1)) / turn_rate_prev
+                vx_pred = vx_prev * cos_wt - vy_prev * sin_wt
+                vy_pred = vy_prev * cos_wt + vx_prev * sin_wt
+            
+            # Turn rate and measurement rate evolution with noise
+            turn_rate_pred = turn_rate_prev + np.random.normal(0, σ_turn * dt)
+            meas_rate_pred = max(0.1, meas_rate_prev + np.random.normal(0, σ_meas * dt))
+            
+            # Add process noise to position and velocity
+            px_pred += np.random.normal(0, σ_pos * dt)
+            py_pred += np.random.normal(0, σ_pos * dt)
+            vx_pred += np.random.normal(0, σ_vel * dt)
+            vy_pred += np.random.normal(0, σ_vel * dt)
+            
+            predicted_kinematic[:, j] = [px_pred, py_pred, vx_pred, vy_pred, turn_rate_pred, meas_rate_pred]
+            
+            # Extent Prediction with Rotation (Equation 8)
+            # E_k ~ W(q_k, V(m_{k-1}) E_{k-1} V(m_{k-1})^T / q_k)
             prev_extent = self.extent_particles[:, :, j]
             
-            # Parameters for Inverse Wishart transition
-            # Degrees of freedom (should be > d-1 where d is dimension)
-            dof = max(self.extent_dim + 2, dof_decay * (self.extent_dim + 10))
+            # Rotation matrix V(m_{k-1}) based on turn angle
+            turn_angle = turn_rate_prev * dt
+            cos_theta = np.cos(turn_angle)
+            sin_theta = np.sin(turn_angle)
+            V = np.array([[cos_theta, -sin_theta],
+                         [sin_theta,  cos_theta]])
             
-            # Scale matrix: combination of previous extent and process noise
-            # This models gradual changes in object extent
-            extent_process_noise = tau * np.eye(self.extent_dim)
-            scale_matrix = (dof - self.extent_dim - 1) * prev_extent + extent_process_noise
+            # Rotate extent: V * E * V^T
+            rotated_extent = V @ prev_extent @ V.T
             
-            # Sample from Inverse Wishart
-            # IW(E; ν, Ψ) where Ψ is scale matrix, ν is degrees of freedom
+            # Sample from Wishart distribution for extent prediction
+            # W(q, Ψ) where Ψ = rotated_extent / q
+            scale_matrix = rotated_extent / q_extent
+            
             try:
-                predicted_extent[:, :, j] = self.sample_inverse_wishart(dof, scale_matrix)
-            except (ValueError, np.linalg.LinAlgError) as e:
-                # Fallback: add small noise if sampling fails
-                # This can happen if matrix becomes ill-conditioned
-                extent_noise = tau * np.eye(self.extent_dim)
-                predicted_extent[:, :, j] = prev_extent + extent_noise
+                # Sample from Wishart distribution
+                # Note: Using Wishart (not Inverse Wishart) as per Equation (8)
+                predicted_extent[:, :, j] = wishart.rvs(df=q_extent, scale=scale_matrix)
+            except (ValueError, np.linalg.LinAlgError):
+                # Fallback if sampling fails
+                predicted_extent[:, :, j] = rotated_extent
             
-            # Ensure positive semidefinite (should already be from IW, but for safety)
+            # Ensure positive semidefinite
             eigenvals, eigenvecs = np.linalg.eigh(predicted_extent[:, :, j])
             eigenvals = np.maximum(eigenvals, 1e-6)
             predicted_extent[:, :, j] = eigenvecs @ np.diag(eigenvals) @ eigenvecs.T
@@ -307,7 +343,6 @@ class EOFilter:
             predicted_weights[j] = survival_prob * np.exp(-mu_m) * self.weights[j]
         
         # Compute α̲^n_k according to equation (12)
-        # p^e-_k = sum of previous weights (approximates existence probability)
         p_exist_prev = np.sum(self.weights)
         alpha_n = (1 - p_exist_prev) + (1 - survival_prob) * p_exist_prev
         
