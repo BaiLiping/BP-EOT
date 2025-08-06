@@ -166,7 +166,8 @@ class EOFilter:
                      state_transition_matrix: np.ndarray,
                      process_noise_cov: np.ndarray,
                      survival_prob: float,
-                     measurement_rate_func: callable) -> Tuple[np.ndarray, float]:
+                     measurement_rate_func: callable,
+                     extent_prediction_params: Optional[Dict] = None) -> Tuple[np.ndarray, float]:
         """
         Compute α (alpha) message - Prediction step.
         
@@ -179,15 +180,32 @@ class EOFilter:
         For r_k = 0: Equation (12)  
         α̲^n_k = f̃^-_k + (1 - p_s) * (1 - f̃^-_k)
         
+        For extent dynamics, the paper mentions using Inverse Wishart distribution.
+        The transition can be modeled as:
+        E_k | E_{k-1} ~ IW(ν_k, (ν_{k-1} - d - 1) * E_{k-1} + τ * Q_e)
+        where τ controls the rate of extent change, Q_e is process noise for extent.
+        
         Args:
             state_transition_matrix: F matrix for kinematic state transition
             process_noise_cov: Q matrix for process noise
             survival_prob: p_s - probability of object survival
             measurement_rate_func: Function to compute μ_m(x,e)
+            extent_prediction_params: Dict with 'tau' (extent change rate), 
+                                    'dof_decay' (degrees of freedom decay)
             
         Returns:
             Tuple of (predicted_weights, alpha_n) where alpha_n is for r_k=0
         """
+        # Default extent prediction parameters
+        if extent_prediction_params is None:
+            extent_prediction_params = {
+                'tau': 0.1,  # Small change rate
+                'dof_decay': 0.99,  # Slow decay of degrees of freedom
+            }
+        
+        tau = extent_prediction_params.get('tau', 0.1)
+        dof_decay = extent_prediction_params.get('dof_decay', 0.99)
+        
         # Predict kinematic particles using state transition
         predicted_kinematic = np.zeros_like(self.kinematic_particles)
         predicted_extent = np.zeros_like(self.extent_particles)
@@ -198,12 +216,31 @@ class EOFilter:
                                         np.random.multivariate_normal(np.zeros(self.kinematic_dim), 
                                                                      process_noise_cov))
             
-            # Extent prediction: For simplicity, add small noise to maintain positive definiteness
-            # In practice, this could be more sophisticated (e.g., using Wishart dynamics)
-            extent_noise = 0.01 * np.eye(self.extent_dim)
-            predicted_extent[:, :, j] = self.extent_particles[:, :, j] + extent_noise
+            # Extent prediction using Inverse Wishart dynamics
+            # E_k | E_{k-1} follows an Inverse Wishart distribution
+            prev_extent = self.extent_particles[:, :, j]
             
-            # Ensure positive semidefinite
+            # Parameters for Inverse Wishart transition
+            # Degrees of freedom (should be > d-1 where d is dimension)
+            dof = max(self.extent_dim + 2, dof_decay * (self.extent_dim + 10))
+            
+            # Scale matrix: combination of previous extent and process noise
+            # This models gradual changes in object extent
+            extent_process_noise = tau * np.eye(self.extent_dim)
+            scale_matrix = (dof - self.extent_dim - 1) * prev_extent + extent_process_noise
+            
+            # Sample from Inverse Wishart
+            # IW(E; ν, Ψ) where Ψ is scale matrix, ν is degrees of freedom
+            try:
+                # Sample from Wishart then invert (standard technique)
+                wishart_sample = wishart.rvs(df=dof, scale=inv(scale_matrix))
+                predicted_extent[:, :, j] = inv(wishart_sample)
+            except:
+                # Fallback: add small noise if sampling fails
+                extent_noise = tau * np.eye(self.extent_dim)
+                predicted_extent[:, :, j] = prev_extent + extent_noise
+            
+            # Ensure positive semidefinite (should already be from IW, but for safety)
             eigenvals, eigenvecs = np.linalg.eigh(predicted_extent[:, :, j])
             eigenvals = np.maximum(eigenvals, 1e-6)
             predicted_extent[:, :, j] = eigenvecs @ np.diag(eigenvals) @ eigenvecs.T
