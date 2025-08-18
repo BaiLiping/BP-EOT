@@ -18,12 +18,10 @@ from dataclasses import dataclass
 from typing import List, Tuple, Optional
 import time
 
-# Import our common utilities
-from eot_common import (
-    get_start_states, generate_tracks_unknown, generate_cluttered_measurements,
-    show_results, EOTParameters
-)
-from eot_elliptical_shape import eot_elliptical_shape
+# Import our new class-based modules
+from GenData import Plant, EOTParameters
+from EO_Filter import EO_Filter
+from visualization import show_results
 
 
 def main():
@@ -149,10 +147,8 @@ def main():
     
     print("Generating ground truth target states and trajectories...")
     
-    # Generate initial target states and extent matrices
-    start_states, start_matrices = get_start_states(
-        num_targets, start_radius, start_velocity, parameters
-    )
+    # Create Plant instance for data generation
+    plant = Plant(parameters)
     
     # Define appearance and disappearance times for each target
     # Format: [appearance_time, disappearance_time] for each target
@@ -161,14 +157,9 @@ def main():
         [9, 89], [12, 92], [12, 92], [15, 95], [15, 95]
     ]).T  # Transpose to match MATLAB indexing
     
-    # Generate true target trajectories
-    target_tracks, target_extents = generate_tracks_unknown(
-        parameters, start_states, start_matrices, appearance_from_to, num_steps
-    )
-    
-    # Generate noisy measurements with clutter
-    measurements = generate_cluttered_measurements(
-        target_tracks, target_extents, parameters
+    # Generate complete scenario using Plant class
+    target_tracks, target_extents, measurements = plant.generate_scenario(
+        num_targets, num_steps, start_radius, start_velocity, appearance_from_to
     )
     
     
@@ -179,8 +170,9 @@ def main():
     print("Running Extended Object Tracking algorithm...")
     start_time = time.time()
     
-    # Run the main EOT algorithm
-    estimated_tracks, estimated_extents = eot_elliptical_shape(measurements, parameters)
+    # Create EO_Filter instance and run tracking
+    eo_filter = EO_Filter(parameters)
+    estimated_tracks, estimated_extents = eo_filter.track(measurements)
     
     end_time = time.time()
     print(f"EOT algorithm completed in {end_time - start_time:.2f} seconds")

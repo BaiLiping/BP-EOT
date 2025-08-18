@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Output files
+*.png
+*.gif
