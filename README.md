@@ -2,7 +2,7 @@
 
 A complete Python implementation of the Extended Object Tracking algorithm for tracking multiple targets with spatial extent in cluttered environments.
 
-![EOT Animation](eot_100_frames.gif)
+![EOT Animation](python_eot_implementation/eot_100_frames.gif)
 
 ## 📖 Overview
 
@@ -269,5 +269,6 @@ This implementation is suitable for:
 This implementation is provided for research and educational purposes. Please cite the original paper when using this code in academic work.
 
 ---
+
 
 *This Python implementation demonstrates the power and complexity of modern multi-target tracking algorithms for extended objects in challenging environments.*
