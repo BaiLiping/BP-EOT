@@ -1,97 +1,56 @@
-# Extended Object Tracking Implementation
+# Meyer - Original MATLAB Implementation
 
-This repository contains implementations of Extended Object Tracking (EOT) algorithms based on the paper:
+This directory contains the original MATLAB implementation of the Extended Object Tracking algorithm by Florian Meyer (2020).
 
-**F. Meyer and J. L. Williams, "Scalable detection and tracking of geometric extended objects," IEEE Trans. Signal Process., vol. 69, pp. 6283–6298, Oct. 2021.**
+## Reference
 
-Paper: [arXiv:2103.11279v4](arXiv-2103.11279v4/)
+F. Meyer and J. L. Williams, "Scalable detection and tracking of geometric extended objects," IEEE Trans. Signal Process., vol. 69, pp. 6283–6298, Oct. 2021.
 
-## Repository Structure
+## Files
 
-### `/Meyer`
-Original MATLAB implementation by Florian Meyer (2020).
-- `main.m` - Main script to run the MATLAB implementation
-- `eotEllipticalShape.m` - Core EOT algorithm implementation
-- `_common/` - Helper functions for the MATLAB implementation
+### Main Files
+- `main.m` - Main script that demonstrates the algorithm with a 5-target scenario
+- `eotEllipticalShape.m` - Core implementation of the EOT algorithm using belief propagation
+- `PL.m` - Additional utility file
 
-### `/Python_Implementation`
-Python implementation of the EOT algorithms.
-- Complete Python port of the MATLAB code
-- Object-oriented design with separate classes for data generation and filtering
-- Test scripts and examples
-- See the [Python README](Python_Implementation/README.md) for detailed documentation
+### Helper Functions (`_common/`)
+- `dataAssociationBP.m` - Belief propagation for data association
+- `generateClutteredMeasurements.m` - Generate measurements with clutter
+- `generateTracksUnknown.m` - Generate ground truth tracks
+- `getPromisingNewTargets.m` - Identify promising new target candidates
+- `performPrediction.m` - Prediction step for particle filtering
+- `updateParticles.m` - Update particles with measurements
+- `trackFormation.m` - Form continuous tracks from estimates
+- Additional utility functions for matrix operations, resampling, etc.
 
-### `/Paper_Replication`
-Pure mathematical implementation based solely on the paper's theoretical formulation.
-- **No reference to existing code** - implemented purely from mathematical equations
-- Demonstrates measurement-oriented data association innovation
-- Factor graph representation with belief propagation
-- Validates completeness of the paper's mathematical specification
-- See the [Paper Replication README](Paper_Replication/README.md) for detailed documentation
+## Usage
 
-### `/arXiv-2103.11279v4`
-Paper source files (LaTeX) and figures.
+To run the MATLAB implementation:
 
-## Overview
+```matlab
+% In MATLAB, navigate to this directory
+cd Meyer
 
-The Extended Object Tracking algorithm enables:
-- Detection and tracking of multiple extended objects with unknown shapes
-- Handling of measurement uncertainty and clutter
-- Belief propagation-based data association
-- Particle filtering for non-linear dynamics
-- Inverse Wishart modeling of object extents
+% Run the main script
+main
+```
+
+The script will:
+1. Generate a scenario with 5 extended objects
+2. Create measurements with clutter
+3. Run the EOT algorithm
+4. Display tracking results
+
+## Parameters
+
+The main parameters are set in `main.m`:
+- Number of time steps: 50
+- Number of targets: 5
+- Number of particles: 5000
+- Surveillance region: [-200, 200] × [-200, 200]
+- Mean measurements per target: 8
+- Mean clutter per scan: 10
 
 ## Visualization
 
-Visualization of Meyer's result: https://www.youtube.com/watch?v=swHLoShcozw
-
-## Getting Started
-
-### MATLAB Implementation
-1. Navigate to the `/Meyer` directory
-2. Run `main.m` in MATLAB
-3. The script will generate a scenario with 5 extended objects and track them over 50 time steps
-
-### Python Implementation
-1. Navigate to the `/Python_Implementation` directory
-2. Install required packages: `pip install numpy scipy matplotlib`  
-3. Run example scripts:
-   - `python test_main_replication.py` - Replicates the MATLAB main.m behavior
-   - `python example_usage.py` - Simple usage example
-   - `python test_fixed_filter.py` - Test with improved filter implementation
-
-### Paper-Based Implementation
-1. Navigate to the `/Paper_Replication` directory
-2. Install required packages: `pip install numpy scipy matplotlib`
-3. Run test scripts:
-   - `python quick_test_paper.py` - Fast validation test
-   - `python test_paper_implementation.py` - Comprehensive test with visualization
-   - `python debug_paper_implementation.py` - Internal algorithm analysis
-
-## Key Features
-
-- **Scalable tracking**: Handles multiple closely-spaced extended objects
-- **Shape estimation**: Jointly estimates object positions and elliptical shapes
-- **Belief propagation**: Efficient probabilistic data association
-- **No clustering required**: Avoids traditional measurement clustering approaches
-- **Particle-based**: Supports non-linear dynamics and non-Gaussian distributions
-
-## Citation
-
-If you use this code, please cite:
-
-```bibtex
-@article{meyer2021scalable,
-  title={Scalable Detection and Tracking of Geometric Extended Objects},
-  author={Meyer, Florian and Williams, Jason L},
-  journal={IEEE Transactions on Signal Processing},
-  volume={69},
-  pages={6283--6298},
-  year={2021},
-  publisher={IEEE}
-}
-```
-
-## License
-
-This code is provided for research purposes. Please refer to the original paper for more details.
+The results are displayed using the `showResults.m` function. Press space to start the animation.
